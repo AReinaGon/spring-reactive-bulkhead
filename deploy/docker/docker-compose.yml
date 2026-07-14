@@ -1,0 +1,51 @@
+# Event-page BFF + downstream simulator, for load-testing the bulkhead by hand or with JMeter (Phase 2).
+#
+#   # 1. build both jars with your local Corretto 25:
+#   (cd ../../downstream-simulator && mvn -DskipTests package)
+#   (cd ../../reactive-bulkhead    && mvn -DskipTests package)
+#   # 2. bring both up (BFF on :8080, simulator on :9090):
+#   docker compose -f deploy/docker/docker-compose.yml up --build -d
+#   # 3. render a page (mode = scheduler|pool|semaphore, isolated = true|false):
+#   curl "http://localhost:8080/api/events/bad-bunny-2027/page?mode=semaphore&isolated=false"
+#   # 4. degrade the non-critical downstream mid-test (the "trick"):
+#   curl -X POST "http://localhost:9090/control?target=recommendations&latencyMs=3000"
+#
+# The shared resources default small so the fragile variant (isolated=false) leaks under load; the
+# per-downstream (isolated) sizes stay ample. If host port 8080 is taken, set HOST_PORT=8081.
+services:
+  simulator:
+    build:
+      context: ../../downstream-simulator
+      dockerfile: Dockerfile
+    image: downstream-simulator:local
+    environment:
+      SERVER_PORT: 9090
+    ports:
+      - "9090:9090"
+
+  bff:
+    build:
+      context: ../../reactive-bulkhead
+      dockerfile: Dockerfile
+    image: reactive-bulkhead:local
+    environment:
+      SERVER_PORT: 8080
+      DOWNSTREAM_BASE_URL: http://simulator:9090
+      # Shared budgets (fragile variant). Small on purpose so a slow downstream leaks under load.
+      SCHED_SHARED_THREADS: ${SCHED_SHARED_THREADS:-4}
+      POOL_SHARED_MAX: ${POOL_SHARED_MAX:-4}
+      SEM_SHARED_MAX: ${SEM_SHARED_MAX:-4}
+      # Per-downstream compartments (isolated variant). Ample.
+      SCHED_AVAILABILITY_THREADS: ${SCHED_AVAILABILITY_THREADS:-50}
+      SCHED_RECOMMENDATIONS_THREADS: ${SCHED_RECOMMENDATIONS_THREADS:-50}
+      POOL_PER_DOWNSTREAM_MAX: ${POOL_PER_DOWNSTREAM_MAX:-50}
+      SEM_PER_DOWNSTREAM_MAX: ${SEM_PER_DOWNSTREAM_MAX:-50}
+      # Behaviour knobs: how long a caller waits for a shared slot before failing, and the
+      # non-critical fallback timeout.
+      POOL_PENDING_ACQUIRE_TIMEOUT_MS: ${POOL_PENDING_ACQUIRE_TIMEOUT_MS:-2000}
+      SEM_MAX_WAIT_MS: ${SEM_MAX_WAIT_MS:-0}
+      RECS_TIMEOUT_MS: ${RECS_TIMEOUT_MS:-300}
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    depends_on:
+      - simulator
