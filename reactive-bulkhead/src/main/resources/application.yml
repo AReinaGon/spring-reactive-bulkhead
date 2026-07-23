@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: reactive-bulkhead
+
+server:
+  port: ${SERVER_PORT:8080}
+
+# Three bulkhead dimensions. Every value is a knob so a load test can shrink a shared resource until
+# it leaks. The "shared-*" sizes are deliberately small; the "per-downstream-*" ones are the isolated
+# compartments.
+resilience:
+  downstream-base-url: ${DOWNSTREAM_BASE_URL:http://localhost:9090}
+  # Non-critical sidebar: fail fast to a fallback so the page never blocks on a slow recommendations
+  # call. This is the "composition" guard; the per-downstream bulkhead below is the "isolation" guard.
+  recommendations-timeout-ms: ${RECS_TIMEOUT_MS:300}
+  scheduler:
+    shared-threads: ${SCHED_SHARED_THREADS:10}
+    availability-threads: ${SCHED_AVAILABILITY_THREADS:20}
+    recommendations-threads: ${SCHED_RECOMMENDATIONS_THREADS:10}
+  pool:
+    shared-max-connections: ${POOL_SHARED_MAX:20}
+    per-downstream-max-connections: ${POOL_PER_DOWNSTREAM_MAX:20}
+    pending-acquire-timeout-ms: ${POOL_PENDING_ACQUIRE_TIMEOUT_MS:2000}
+  semaphore:
+    shared-max-concurrent: ${SEM_SHARED_MAX:20}
+    per-downstream-max-concurrent: ${SEM_PER_DOWNSTREAM_MAX:20}
+    max-wait-ms: ${SEM_MAX_WAIT_MS:0}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  metrics:
+    tags:
+      application: reactive-bulkhead
