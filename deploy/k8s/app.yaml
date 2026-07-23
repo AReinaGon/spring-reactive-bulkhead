@@ -1,0 +1,111 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: bulkhead-poc
+data:
+  # Downstream URL internal to k8s
+  DOWNSTREAM_BASE_URL: "http://simulator:9090"
+  # Shared budgets (fragile variant). Small on purpose so a slow downstream leaks under load.
+  SCHED_SHARED_THREADS: "4"
+  POOL_SHARED_MAX: "4"
+  SEM_SHARED_MAX: "4"
+  # Per-downstream compartments (isolated variant). Ample.
+  SCHED_AVAILABILITY_THREADS: "50"
+  SCHED_RECOMMENDATIONS_THREADS: "50"
+  POOL_PER_DOWNSTREAM_MAX: "50"
+  SEM_PER_DOWNSTREAM_MAX: "50"
+  # Behavior knobs
+  SEM_MAX_WAIT_MS: "0"
+  POOL_PENDING_ACQUIRE_TIMEOUT_MS: "1000"
+  RECS_TIMEOUT_MS: "300"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simulator
+  namespace: bulkhead-poc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: simulator
+  template:
+    metadata:
+      labels:
+        app: simulator
+    spec:
+      containers:
+        - name: simulator
+          image: downstream-simulator:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9090
+          env:
+            - name: SERVER_PORT
+              value: "9090"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: simulator
+  namespace: bulkhead-poc
+spec:
+  selector:
+    app: simulator
+  ports:
+    - port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bff
+  namespace: bulkhead-poc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bff
+  template:
+    metadata:
+      labels:
+        app: bff
+    spec:
+      containers:
+        - name: bff
+          image: reactive-bulkhead:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: SERVER_PORT
+              value: "8080"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bff
+  namespace: bulkhead-poc
+spec:
+  type: LoadBalancer
+  selector:
+    app: bff
+  ports:
+    - port: 8080
+      targetPort: 8080
